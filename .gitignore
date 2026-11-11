@@ -11,14 +11,15 @@ captures/
 .externalNativeBuild/
 .cxx/
 
-# Signing
+# Signing keys stay out of the repo, except the shared debug key
 *.jks
 *.keystore
+!keystore/debug.keystore
 
 # OS
 .DS_Store
 Thumbs.db
 
-# APKs
+# Build output
 *.apk
 *.aab

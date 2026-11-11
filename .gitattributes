@@ -1,0 +1,5 @@
+# Keep the Unix wrapper script runnable when checked out on Windows and built on Linux.
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.keystore binary
