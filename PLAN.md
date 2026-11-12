@@ -14,7 +14,7 @@ A small, sideloaded Android app (personal use, not published for now) that does 
 ## Known facts
 - Phone: Google Pixel 10 Pro, Android 17 (build CP3A.261005.005).
 - PC: Windows, no Android Studio. Builds run from the command line or on GitHub Actions.
-- Assumed, not yet checked: the drive does not show up in the phone's Files app.
+- Checked on the phone (2026-11-12): Android mounts the USB drive itself, so the normal route is "Pick folder with Android". Copying worked.
 
 ## Design as built
 

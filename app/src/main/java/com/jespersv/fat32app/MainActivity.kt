@@ -12,6 +12,9 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
+import android.os.Environment
+import android.os.storage.StorageManager
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
@@ -124,6 +127,7 @@ class MainActivity : Activity() {
                 } else {
                     data.data?.let { uris += it }
                 }
+                uris.firstOrNull()?.let { rememberFolderOf(it) }
                 addFiles(uris)
             }
             REQUEST_TREE -> data.data?.let { tree ->
@@ -153,15 +157,39 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /** Opens Android's file picker in the folder the last files came from, or the phone's main storage. */
     private fun pickFiles() {
+        val start = getSharedPreferences(App.PREFS, MODE_PRIVATE).getString(PREF_LAST_FOLDER, null)
+            ?.let { Uri.parse(it) }
+            ?: DocumentsContract.buildDocumentUri(PHONE_STORAGE, "primary:")
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
             .addCategory(Intent.CATEGORY_OPENABLE)
             .setType("*/*")
             .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            .putExtra(DocumentsContract.EXTRA_INITIAL_URI, start)
         launch(intent, REQUEST_FILES)
     }
 
-    private fun pickFolderWithAndroid() = launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_TREE)
+    /**
+     * Remembers the folder of a picked file for next time. Only possible for files picked
+     * by browsing the phone's storage; picks from Recent, Downloads or Photos have no folder.
+     */
+    private fun rememberFolderOf(file: Uri) {
+        if (file.authority != PHONE_STORAGE) return
+        val id = runCatching { DocumentsContract.getDocumentId(file) }.getOrNull() ?: return
+        val parent = if ('/' in id) id.substringBeforeLast('/') else id.substringBefore(':') + ":"
+        val folder = DocumentsContract.buildDocumentUri(PHONE_STORAGE, parent)
+        getSharedPreferences(App.PREFS, MODE_PRIVATE).edit().putString(PREF_LAST_FOLDER, folder.toString()).apply()
+    }
+
+    /** Opens Android's folder picker directly on the USB drive when Android has one mounted. */
+    private fun pickFolderWithAndroid() {
+        val storage = getSystemService(StorageManager::class.java)
+        val usb = storage.storageVolumes.firstOrNull {
+            it.isRemovable && (it.state == Environment.MEDIA_MOUNTED)
+        }
+        launch(usb?.createOpenDocumentTreeIntent() ?: Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_TREE)
+    }
 
     private fun launch(intent: Intent, request: Int) {
         try {
@@ -185,14 +213,16 @@ class MainActivity : Activity() {
 
     private fun confirmDirect() {
         AlertDialog.Builder(this)
-            .setTitle("Use the drive directly?")
+            .setTitle("Let this app handle the drive itself?")
             .setMessage(
-                "Android has this drive mounted. Taking it over disconnects it from Android " +
-                    "without ejecting, as if it had been pulled out. Do this only if nothing " +
-                    "else is using the drive.\n\nThe usual choice is to cancel and use " +
-                    "\"Pick folder with Android\"."
+                "Normally Android handles the USB drive, and this app copies through Android. " +
+                    "This option makes the app talk to the drive itself instead. Use it only if " +
+                    "copying through Android does not work.\n\n" +
+                    "Android will treat the drive as removed without being ejected, so make sure " +
+                    "no other app is using it. Afterwards the app shows when it is safe to unplug; " +
+                    "no ejecting is needed."
             )
-            .setPositiveButton("Use directly") { _, _ -> Session.takeOverDirectly() }
+            .setPositiveButton("Let the app handle it") { _, _ -> Session.takeOverDirectly() }
             .setNegativeButton("Cancel", null)
             .show()
     }
@@ -335,15 +365,13 @@ class MainActivity : Activity() {
         return when (drive) {
             Session.Drive.NONE -> Triple(
                 "No USB drive",
-                "Plug in a FAT16 or FAT32 drive. If Android shows the drive in its Files app, " +
-                    "use \"Pick folder with Android\".",
+                "Plug in a USB drive formatted as FAT16 or FAT32.",
                 GREY,
             )
             Session.Drive.DETECTING -> Triple("Drive plugged in", "Checking whether Android mounts it.", GREY)
             Session.Drive.ANDROID_MOUNTED -> Triple(
-                "Android has mounted this drive",
-                "Choose a folder on it with \"Pick folder with Android\". That is the safe route " +
-                    "while Android is using the drive.",
+                "USB drive found",
+                "Choose a target folder on the USB drive with \"Pick folder with Android\".",
                 BLUE,
             )
             Session.Drive.NEED_PERMISSION -> Triple(
@@ -422,7 +450,7 @@ class MainActivity : Activity() {
         column.addView(statusCard, rowParams(bottom = 8))
 
         pickFolderButton = button("Pick folder with Android") { pickFolderWithAndroid() }
-        directButton = button("Use drive directly") { confirmDirect() }
+        directButton = button("Let this app handle the drive itself (advanced)") { confirmDirect() }
         retryButton = button("Look for a drive again") {
             if (Session.drive == Session.Drive.NEED_PERMISSION) Session.askPermissionAgain() else Session.scan()
         }
@@ -431,7 +459,6 @@ class MainActivity : Activity() {
                 .onFailure { toast("Open Settings, then Storage, to eject the drive.") }
         }
         column.addView(pickFolderButton, rowParams())
-        column.addView(directButton, rowParams())
         column.addView(retryButton, rowParams())
         column.addView(storageButton, rowParams())
 
@@ -517,6 +544,7 @@ class MainActivity : Activity() {
             }
         }
         diagBox.addView(inspectButton, rowParams())
+        diagBox.addView(directButton, rowParams())
         diagBox.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(button("Share log") { shareLog() }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
@@ -585,6 +613,8 @@ class MainActivity : Activity() {
         private const val REQUEST_NOTIFICATIONS = 3
         private const val MAX_LISTED = 30
         private const val DIAG_LINES = 80
+        private const val PREF_LAST_FOLDER = "last_file_folder"
+        private const val PHONE_STORAGE = "com.android.externalstorage.documents"
         private val GREEN = Color.rgb(0x2E, 0x7D, 0x32)
         private val RED = Color.rgb(0xC6, 0x28, 0x28)
         private val AMBER = Color.rgb(0xB2, 0x6A, 0x00)

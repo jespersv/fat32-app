@@ -44,14 +44,15 @@ All builds are signed with the debug key in `keystore/`, so a new build installs
 
 ## Use
 
-1. Plug in the drive and open **USB Copy** (Android may offer it when the drive is attached). Allow USB access when asked.
-2. Wait for the green **Safe to unplug** card. It shows the drive's name, file system and free space.
-3. Optional: **Change folder** to pick or create a destination folder.
-4. **Add files**, or share files into the app from another app.
-5. **Copy**. The card turns red and says not to unplug.
-6. When the card is green again, unplug.
+On the Pixel 10 Pro, Android mounts the USB drive itself, so this is the normal flow:
 
-If Android itself mounts the drive (it then shows up in the Files app), the app says so. Use **Pick folder with Android** in that case, and eject the drive in Android before unplugging.
+1. Plug in the drive and open **USB Copy**. The card says **USB drive found**.
+2. **Pick folder with Android**. The picker opens on the USB drive; choose or create the target folder.
+3. **Add files** (the picker starts in the phone's storage, then in the folder you last added from), or share files into the app from another app.
+4. **Copy**. The card turns red and says not to unplug.
+5. When it is done, eject the drive in Android (the USB notification or Storage settings), then unplug.
+
+If Android does not mount a drive, the app handles it itself: allow USB access when asked, and unplug when the card is green and says **Safe to unplug**. The same can be forced for a mounted drive under Diagnostics, "Let this app handle the drive itself (advanced)", if copying through Android does not work.
 
 ## Diagnostics
 
