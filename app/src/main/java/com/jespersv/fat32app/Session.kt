@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.net.Uri
@@ -68,6 +69,9 @@ object Session {
     const val ACTION_USB_PERMISSION = "com.jespersv.fat32app.USB_PERMISSION"
     private const val DETECT_DELAY_MS = 2500L
     private const val BUSY_RETRY_MS = 1000L
+    private const val PREF_FILES = "files"
+    private const val PREF_VERIFY = "verify"
+    private const val PREF_COLLISION = "on_collision"
 
     val io: ExecutorService = Executors.newSingleThreadExecutor { Thread(it, "drive-io") }
     val main = Handler(Looper.getMainLooper())
@@ -85,9 +89,19 @@ object Session {
     var freeBytes: Long? = null
         private set
     var destDir: List<String> = emptyList()
-    val sources = ArrayList<UriSource>()
+    private val fileList = ArrayList<UriSource>()
+
+    /** The files to copy. Kept across copies and app restarts; change it only through the functions below. */
+    val sources: List<UriSource> get() = fileList
+
+    /** Set when saved files could not be opened again after a restart. Shown under the file list. */
+    var missingFiles: String? = null
+        private set
+
     var verify = true
+        set(value) { field = value; saveSettings() }
     var onCollision = Copier.OnCollision.SKIP
+        set(value) { field = value; saveSettings() }
     var copy: CopyJob? = null
         private set
     var outcome: Outcome? = null
@@ -98,6 +112,7 @@ object Session {
     var diagOpen = false
 
     private lateinit var app: Context
+    private lateinit var prefs: SharedPreferences
     private lateinit var usbManager: UsbManager
     private var device: UsbMassStorageDevice? = null
     private var askedPermissionFor: String? = null
@@ -109,6 +124,8 @@ object Session {
     fun init(context: Context) {
         app = context.applicationContext
         usbManager = app.getSystemService(Context.USB_SERVICE) as UsbManager
+        prefs = app.getSharedPreferences(App.PREFS, Context.MODE_PRIVATE)
+        restoreSettings()
 
         val usb = IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
@@ -289,7 +306,6 @@ object Session {
                 is Copier.Result.Skipped -> "SKIP  $name: ${result.reason}"
                 is Copier.Result.Failed -> { problems = true; "FAIL  $name: ${result.reason}" }
             }
-            if (result is Copier.Result.Copied) sources.remove(job.sources[i])
             if (result is Copier.Result.Skipped && result.reason == "Cancelled") problems = true
         }
         Diag.i(
@@ -308,6 +324,95 @@ object Session {
         if (!lost) freeBytes = free
         changed()
         scan()
+    }
+
+    fun addSources(added: List<UriSource>) {
+        var count = 0
+        for (source in added) {
+            if (fileList.none { it.uri == source.uri }) {
+                fileList += source
+                count++
+            }
+        }
+        Diag.i("Added $count files to the list (${fileList.size} in total)")
+        missingFiles = null
+        outcome = null
+        saveSettings()
+        changed()
+    }
+
+    fun removeSource(source: UriSource) {
+        fileList.remove(source)
+        releaseReadPermission(source.uri)
+        Diag.i("Removed '${source.name}' from the list")
+        saveSettings()
+        changed()
+    }
+
+    fun clearSources() {
+        val old = ArrayList(fileList)
+        fileList.clear()
+        old.forEach { releaseReadPermission(it.uri) }
+        missingFiles = null
+        Diag.i("File list cleared")
+        saveSettings()
+        changed()
+    }
+
+    /** Files picked in Android's picker can be read again after a restart if the app keeps their permission. */
+    private fun releaseReadPermission(uri: Uri) {
+        runCatching { app.contentResolver.releasePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+    }
+
+    /** False until the saved list has been read back, so an early save cannot overwrite it. */
+    private var filesLoaded = false
+
+    private fun saveSettings() {
+        if (!::prefs.isInitialized) return
+        val edit = prefs.edit()
+            .putBoolean(PREF_VERIFY, verify)
+            .putString(PREF_COLLISION, onCollision.name)
+        if (filesLoaded) edit.putString(PREF_FILES, fileList.joinToString("\n") { it.uri.toString() })
+        edit.apply()
+    }
+
+    /** Loads the options at once and the saved file list in the background (it has to ask each file's app). */
+    private fun restoreSettings() {
+        verify = prefs.getBoolean(PREF_VERIFY, true)
+        onCollision = runCatching { Copier.OnCollision.valueOf(prefs.getString(PREF_COLLISION, null)!!) }
+            .getOrDefault(Copier.OnCollision.SKIP)
+        val saved = prefs.getString(PREF_FILES, null).orEmpty().lines().filter { it.isNotBlank() }.map { Uri.parse(it) }
+        if (saved.isEmpty()) {
+            filesLoaded = true
+            return
+        }
+        val resolver = app.contentResolver
+        Thread {
+            val found = ArrayList<UriSource>()
+            val lost = ArrayList<String>()
+            for (uri in saved) {
+                val readable = runCatching { resolver.openFileDescriptor(uri, "r")?.use { true } ?: false }
+                if (readable.getOrDefault(false)) {
+                    found += UriSource.from(resolver, uri)
+                } else {
+                    lost += uri.lastPathSegment?.substringAfterLast('/') ?: uri.toString()
+                    Diag.w("Saved file can no longer be read: $uri", readable.exceptionOrNull())
+                }
+            }
+            main.post {
+                // Files added while this was loading stay; the saved ones go first.
+                fileList.addAll(0, found.filter { f -> fileList.none { it.uri == f.uri } })
+                filesLoaded = true
+                saveSettings()
+                if (lost.isNotEmpty()) {
+                    missingFiles = "${lost.size} saved file(s) could not be opened again and were removed " +
+                        "from the list. Files shared from another app are only available until the app restarts; " +
+                        "add them with Add files to keep them."
+                }
+                Diag.i("Restored ${found.size} saved files, ${lost.size} no longer available")
+                changed()
+            }
+        }.start()
     }
 
     fun clearOutcome() {

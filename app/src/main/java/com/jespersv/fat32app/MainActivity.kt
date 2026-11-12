@@ -53,6 +53,9 @@ class MainActivity : Activity() {
     private lateinit var destinationLabel: TextView
     private lateinit var destinationButton: Button
     private lateinit var filesLabel: TextView
+    private lateinit var filesBox: LinearLayout
+    private var shownFiles: List<UriSource>? = null
+    private var shownCopying = false
     private lateinit var addButton: Button
     private lateinit var clearButton: Button
     private lateinit var verifyBox: CheckBox
@@ -128,10 +131,21 @@ class MainActivity : Activity() {
                     data.data?.let { uris += it }
                 }
                 uris.firstOrNull()?.let { rememberFolderOf(it) }
+                // Keep read access across restarts, so the list can be reused for the next drive.
+                for (uri in uris) {
+                    runCatching { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                }
                 addFiles(uris)
             }
             REQUEST_TREE -> data.data?.let { tree ->
                 val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                // Each new drive adds a folder permission and Android caps how many an app may keep,
+                // so let go of the folders picked on earlier drives.
+                for (old in contentResolver.persistedUriPermissions) {
+                    if (old.uri != tree && DocumentsContract.isTreeUri(old.uri)) {
+                        runCatching { contentResolver.releasePersistableUriPermission(old.uri, flags) }
+                    }
+                }
                 runCatching { contentResolver.takePersistableUriPermission(tree, flags) }
                 Session.useFolder(tree)
             }
@@ -148,11 +162,7 @@ class MainActivity : Activity() {
                     toast("Wait for the running copy to finish before adding files.")
                     return@post
                 }
-                for (source in added) {
-                    if (Session.sources.none { it.uri == source.uri }) Session.sources += source
-                }
-                Session.clearOutcome()
-                Session.changed()
+                Session.addSources(added)
             }
         }.start()
     }
@@ -268,13 +278,7 @@ class MainActivity : Activity() {
         }
 
         val sources = Session.sources
-        filesLabel.text = if (sources.isEmpty()) {
-            "No files chosen yet."
-        } else {
-            val shown = sources.take(MAX_LISTED).joinToString("\n") { "${it.name}  (${Session.formatSize(it.size)})" }
-            val more = if (sources.size > MAX_LISTED) "\nand ${sources.size - MAX_LISTED} more" else ""
-            shown + more
-        }
+        renderFiles(sources, copying)
         addButton.isEnabled = !copying
         clearButton.show(sources.isNotEmpty() && !copying)
         verifyBox.isEnabled = !copying
@@ -309,6 +313,47 @@ class MainActivity : Activity() {
 
         logLabel.text = Session.log.asReversed().joinToString("\n")
         logLabel.show(Session.log.isNotEmpty())
+    }
+
+    /** One row per file with a remove button. Rebuilt only when the list changes. */
+    private fun renderFiles(sources: List<UriSource>, copying: Boolean) {
+        if (sources != shownFiles || copying != shownCopying) {
+            shownFiles = ArrayList(sources)
+            shownCopying = copying
+            filesBox.removeAllViews()
+            for (source in sources.take(MAX_LISTED)) {
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                row.addView(TextView(this).apply {
+                    textSize = 14f
+                    text = "${source.name}  (${Session.formatSize(source.size)})"
+                }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+                if (!copying) {
+                    row.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply {
+                        text = "\u2715"
+                        contentDescription = "Remove ${source.name}"
+                        setOnClickListener { Session.removeSource(source) }
+                    }, LinearLayout.LayoutParams(dp(48), dp(48)))
+                }
+                filesBox.addView(row)
+            }
+        }
+        val notes = ArrayList<String>()
+        if (sources.isEmpty()) notes += "No files chosen yet."
+        if (sources.size > MAX_LISTED) notes += "and ${sources.size - MAX_LISTED} more (Clear list removes all)"
+        Session.missingFiles?.let { notes += it }
+        filesLabel.text = notes.joinToString("\n")
+        filesLabel.show(notes.isNotEmpty())
+    }
+
+    private fun confirmClearFiles() {
+        AlertDialog.Builder(this)
+            .setMessage("Remove all ${Session.sources.size} files from the list? The files themselves are not deleted.")
+            .setPositiveButton("Clear list") { _, _ -> Session.clearSources() }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun renderDiag() {
@@ -468,13 +513,16 @@ class MainActivity : Activity() {
         column.addView(destinationButton, rowParams())
 
         column.addView(heading("Files"), rowParams(top = 20))
+        column.addView(TextView(this).apply {
+            textSize = 13f
+            text = "The list is kept after copying and when the app is closed, ready for the next drive."
+        }, rowParams(bottom = 4))
+        filesBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        column.addView(filesBox, rowParams(bottom = 4))
         filesLabel = TextView(this).apply { textSize = 14f }
         column.addView(filesLabel, rowParams(bottom = 4))
         addButton = button("Add files") { pickFiles() }
-        clearButton = button("Clear list") {
-            Session.sources.clear()
-            Session.changed()
-        }
+        clearButton = button("Clear list") { confirmClearFiles() }
         column.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(addButton, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))

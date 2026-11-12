@@ -51,6 +51,9 @@ On the Pixel 10 Pro, Android mounts the USB drive itself, so this is the normal 
 3. **Add files** (the picker starts in the phone's storage, then in the folder you last added from), or share files into the app from another app.
 4. **Copy**. The card turns red and says not to unplug.
 5. When it is done, eject the drive in Android (the USB notification or Storage settings), then unplug.
+6. Next drive: plug it in, **Pick folder with Android** (opens at the new drive's root), **Copy**.
+
+The file list, "verify" and the name-clash choice are kept after copying and when the app is closed, so the same files can go to drive after drive. Remove single files with ✕, or all with **Clear list**. Files shared into the app from another app only stay until the app restarts; add them with **Add files** to keep them.
 
 If Android does not mount a drive, the app handles it itself: allow USB access when asked, and unplug when the card is green and says **Safe to unplug**. The same can be forced for a mounted drive under Diagnostics, "Let this app handle the drive itself (advanced)", if copying through Android does not work.
 
