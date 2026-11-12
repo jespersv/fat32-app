@@ -1,5 +1,6 @@
 package com.jespersv.fat32app.usb
 
+import com.jespersv.fat32app.core.Diag
 import com.jespersv.fat32app.core.FatProbe
 import de.waldheinz.fs.BlockDevice
 import me.jahnen.libaums.core.driver.BlockDeviceDriver
@@ -51,6 +52,27 @@ class AumsBlockDevice(
     /** Device transfers made, for tests. */
     var deviceWrites = 0
         private set
+
+    // Counters for the diagnostics log, reset by takeStats().
+    private var statWrites = 0
+    private var statWriteBytes = 0L
+    private var statWriteNanos = 0L
+    private var statReads = 0
+    private var statReadBytes = 0L
+    private var statReadNanos = 0L
+    private var statSkipped = 0
+    private var statSlowest = 0L
+
+    /** "USB writes: ... reads: ..." since the last call. */
+    fun takeStats(): String {
+        val text = "USB writes ${statWrites}x, ${Diag.rate(statWriteBytes, statWriteNanos)}; " +
+            "reads ${statReads}x, ${Diag.rate(statReadBytes, statReadNanos)}; " +
+            "unchanged table blocks skipped $statSkipped; slowest transfer ${statSlowest / 1_000_000} ms"
+        statWrites = 0; statWriteBytes = 0; statWriteNanos = 0
+        statReads = 0; statReadBytes = 0; statReadNanos = 0
+        statSkipped = 0; statSlowest = 0
+        return text
+    }
 
     override fun getSize(): Long = layout.totalBytes
     override fun getSectorSize(): Int = layout.bytesPerSector
@@ -152,12 +174,22 @@ class AumsBlockDevice(
                 val digest = if (inTable) sha.digest(piece) else null
                 if (digest == null || !digest.contentEquals(onDrive[at])) {
                     if (digest != null) onDrive.remove(at)
+                    val start = System.nanoTime()
                     driver.write(at, ByteBuffer.wrap(piece))
+                    val took = System.nanoTime() - start
                     deviceWrites++
+                    statWrites++; statWriteBytes += n; statWriteNanos += took
+                    noteTiming("write", at, n, took)
                     if (digest != null) onDrive[at] = digest
+                } else {
+                    statSkipped++
                 }
             } else {
+                val start = System.nanoTime()
                 driver.read(at, ByteBuffer.wrap(piece))
+                val took = System.nanoTime() - start
+                statReads++; statReadBytes += n; statReadNanos += took
+                noteTiming("read", at, n, took)
                 System.arraycopy(piece, 0, data, from + done, n)
                 if (inTable) onDrive[at] = sha.digest(piece)
             }
@@ -165,6 +197,21 @@ class AumsBlockDevice(
         }
     }
 
+    private fun noteTiming(kind: String, offset: Long, length: Int, nanos: Long) {
+        if (nanos > statSlowest) statSlowest = nanos
+        val ms = nanos / 1_000_000
+        if (ms >= SLOW_MS) {
+            Diag.w("Slow USB $kind: $length bytes at offset $offset took $ms ms")
+        } else if (Diag.verbose) {
+            Diag.v("USB $kind $length bytes at $offset: ${nanos / 1000} us")
+        }
+    }
+
     private fun floor(offset: Long) = offset - offset % blockSize
     private fun ceil(offset: Long) = floor(offset + blockSize - 1)
+
+    private companion object {
+        /** A single 64 KiB transfer taking this long points at a struggling drive or cable. */
+        const val SLOW_MS = 1000L
+    }
 }

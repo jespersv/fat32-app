@@ -53,6 +53,24 @@ All builds are signed with the debug key in `keystore/`, so a new build installs
 
 If Android itself mounts the drive (it then shows up in the Files app), the app says so. Use **Pick folder with Android** in that case, and eject the drive in Android before unplugging.
 
+## Diagnostics
+
+At the bottom of the screen, **Diagnostics** opens the app's log: drive detection, USB permission, partition and FAT details, per-file speed, and every error with its stack trace. Crashes are recorded too.
+
+- **Inspect drive (read only)** logs everything about the connected drive and measures read speed, without writing. A good first step with a new stick.
+- **Share log** sends a text file (app log, phone details, and the app's own system log) to any app, for example email or Drive.
+- **Verbose** logs every USB transfer. Only switch it on while chasing a problem.
+
+With adb connected, `adb logcat -s USBCopy` shows the same lines live.
+
+### adb over Wi-Fi
+
+1. `winget install -e --id Google.PlatformTools`, then open a new terminal.
+2. On the phone: Settings, About phone, tap Build number 7 times. Then Settings, System, Developer options, Wireless debugging: on. Phone and PC on the same Wi-Fi.
+3. Once: tap "Pair device with pairing code", run `adb pair <ip>:<port>` with that dialog's address and enter the code.
+4. Each session: `adb connect <ip>:<port>` with the address on the Wireless debugging screen (a different port), then `adb devices`.
+5. `adb install -r app-debug.apk` to update the app.
+
 ## How "safe to unplug" works
 
 There are two routes, because an app cannot unmount a drive that Android has mounted.

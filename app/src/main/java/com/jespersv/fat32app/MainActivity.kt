@@ -3,6 +3,8 @@ package com.jespersv.fat32app
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
@@ -27,7 +29,9 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import java.util.concurrent.atomic.AtomicBoolean
 import com.jespersv.fat32app.core.Copier
+import com.jespersv.fat32app.core.Diag
 import com.jespersv.fat32app.saf.UriSource
 
 /**
@@ -55,8 +59,23 @@ class MainActivity : Activity() {
     private lateinit var progressLabel: TextView
     private lateinit var cancelButton: Button
     private lateinit var logLabel: TextView
+    private lateinit var diagToggle: Button
+    private lateinit var diagBox: LinearLayout
+    private lateinit var diagText: TextView
+    private lateinit var inspectButton: Button
 
     private val onChange: () -> Unit = { render() }
+
+    /** New log lines arrive from any thread, often. Redraw the log view at most four times a second. */
+    private val diagPending = AtomicBoolean(false)
+    private val onLogLine: () -> Unit = {
+        if (diagPending.compareAndSet(false, true)) {
+            Session.main.postDelayed({
+                diagPending.set(false)
+                renderDiag()
+            }, 250)
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -72,12 +91,15 @@ class MainActivity : Activity() {
     override fun onStart() {
         super.onStart()
         Session.addListener(onChange)
+        Diag.addListener(onLogLine)
         Session.scan()
         render()
+        renderDiag()
     }
 
     override fun onStop() {
         Session.removeListener(onChange)
+        Diag.removeListener(onLogLine)
         super.onStop()
     }
 
@@ -253,8 +275,48 @@ class MainActivity : Activity() {
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
 
+        inspectButton.isEnabled = !copying
+
         logLabel.text = Session.log.asReversed().joinToString("\n")
         logLabel.show(Session.log.isNotEmpty())
+    }
+
+    private fun renderDiag() {
+        diagBox.show(Session.diagOpen)
+        diagToggle.text = if (Session.diagOpen) "Diagnostics  \u25BE" else "Diagnostics  \u25B8"
+        if (Session.diagOpen) diagText.text = Diag.recent(DIAG_LINES).asReversed().joinToString("\n")
+    }
+
+    private fun shareLog() {
+        toast("Preparing the log")
+        Thread {
+            val result = runCatching { DiagShare.buildIntent(applicationContext) }
+            Session.main.post {
+                result.onSuccess { intent ->
+                    runCatching { startActivity(intent) }.onFailure { toast("No app to share with: ${it.message}") }
+                }.onFailure {
+                    Diag.e("Building the shared log failed", it)
+                    toast("Could not build the log: ${it.message}")
+                }
+            }
+        }.start()
+    }
+
+    private fun copyLog() {
+        val text = Diag.recent().joinToString("\n")
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("USB Copy log", text))
+        toast("Copied the last ${Diag.recent().size} lines")
+    }
+
+    private fun confirmClearLog() {
+        AlertDialog.Builder(this)
+            .setMessage("Delete the diagnostics log?")
+            .setPositiveButton("Delete") { _, _ ->
+                Diag.clear()
+                Diag.i("Log cleared")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     /** Headline, explanation and colour for the status card. */
@@ -436,6 +498,48 @@ class MainActivity : Activity() {
         }
         column.addView(logLabel, rowParams(top = 20))
 
+        diagToggle = button("Diagnostics") {
+            Session.diagOpen = !Session.diagOpen
+            renderDiag()
+        }
+        column.addView(diagToggle, rowParams(top = 24))
+        diagBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        diagBox.addView(TextView(this).apply {
+            textSize = 13f
+            text = "A record of what the app did, for finding problems. It stays on the phone " +
+                "unless you share it. Newest lines first."
+        }, rowParams(bottom = 4))
+        inspectButton = button("Inspect drive (read only)") {
+            inspectButton.isEnabled = false
+            Session.inspect {
+                render()
+                toast("Inspection written to the log")
+            }
+        }
+        diagBox.addView(inspectButton, rowParams())
+        diagBox.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(button("Share log") { shareLog() }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(button("Copy") { copyLog() }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            addView(button("Clear") { confirmClearLog() }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        }, rowParams())
+        diagBox.addView(CheckBox(this).apply {
+            text = "Verbose: log every USB transfer (many lines; use only while chasing a problem)"
+            isChecked = Diag.verbose
+            setOnCheckedChangeListener { _, checked ->
+                Diag.verbose = checked
+                getSharedPreferences(App.PREFS, MODE_PRIVATE).edit().putBoolean(App.PREF_VERBOSE, checked).apply()
+                Diag.i("Verbose logging ${if (checked) "on" else "off"}")
+            }
+        }, rowParams())
+        diagText = TextView(this).apply {
+            textSize = 11f
+            typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+        }
+        diagBox.addView(diagText, rowParams(top = 8))
+        column.addView(diagBox, rowParams())
+
         return ScrollView(this).apply {
             isFillViewport = true
             addView(column, MATCH_PARENT, WRAP_CONTENT)
@@ -480,6 +584,7 @@ class MainActivity : Activity() {
         private const val REQUEST_TREE = 2
         private const val REQUEST_NOTIFICATIONS = 3
         private const val MAX_LISTED = 30
+        private const val DIAG_LINES = 80
         private val GREEN = Color.rgb(0x2E, 0x7D, 0x32)
         private val RED = Color.rgb(0xC6, 0x28, 0x28)
         private val AMBER = Color.rgb(0xB2, 0x6A, 0x00)

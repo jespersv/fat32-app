@@ -75,3 +75,32 @@ Use a drive with nothing important on it.
 1. Is the drive FAT32 or FAT16? Both are supported; it only matters for testing.
 2. Does Android mount the drive? Decides which route is used day to day.
 3. Does libaums work on Android 17 with this drive? Only the device test can tell.
+
+## Next: diagnostics log (D1 to D4)
+
+Goal: after a test on the phone, one tap produces a text file that shows what happened, so problems can be fixed without guessing. Nothing is sent anywhere; the user shares the file.
+
+### What is recorded
+- **Once per log:** app version, Android version and build, phone model, memory page size, maximum heap, whether libaums' native helper libraries loaded.
+- **Drive events:** USB attached/detached (vendor/product ID, product name, interface class/subclass/protocol, endpoints), permission asked/granted/denied, Android storage volume states (mounted, checking, ejecting), which route was chosen and why.
+- **Opening a drive:** SCSI block size and block count, partition table type and entries, FAT probe result (type, sector and cluster size, cluster count, FAT size, number of FATs), free space, time taken, memory used.
+- **Each copy:** file name, size, destination, write time and speed, verify time, result. Cancel, unplug and flush events.
+- **Errors:** every caught exception with its stack trace, and a crash handler that writes uncaught exceptions to the log before the app dies.
+- **Verbose mode (off by default):** timing of each USB transfer, to find slow or stalling drives.
+
+### Where it is kept
+- A logger in `core/` (plain Kotlin, thread-safe), writing to the app's private storage: `diag.log`, rotated to `diag.1.log` at 1 MB. It survives crashes and restarts.
+- Mirrored to Logcat under the tag `USBCopy`, so `adb logcat -s USBCopy` shows it live.
+- When shared, the app also adds its own Logcat output (`logcat -d --pid`), which contains libaums' internal messages that the logger cannot see.
+
+### In the app
+- A collapsed **Diagnostics** section at the bottom of the screen: the last ~50 lines, **Share log** (Android share sheet, as a .txt file), **Copy**, **Clear**, and a **Verbose** switch.
+- **Inspect drive**: a read-only check that opens the drive, logs everything above and writes nothing. Useful as the very first test with an unknown stick.
+
+### Steps
+- [x] **D1** Logger, crash handler, file rotation, Share/Copy/Clear. Unit tests for rotation and thread safety.
+- [x] **D2** Log calls in USB detection, opening, copying and the Android-mounted route.
+- [x] **D3** "Inspect drive" button (also measures read speed over 16 MB).
+- [x] **D4** Verbose per-transfer timing in the block device adapter. Transfers over 1 s are always logged as warnings.
+
+File names appear in the log. That is fine for a personal tool; the Share step makes it obvious what leaves the phone.

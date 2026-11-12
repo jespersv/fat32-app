@@ -63,6 +63,37 @@ class FatVolume(private val fs: FatLibFileSystem) : Volume {
         fs.device.flush()
     }
 
+    override fun takeStats(): String = fs.device.takeStats()
+
+    override fun describe(): List<String> {
+        val p = fs.probe
+        return listOf(
+            "Volume '$title', $fsName",
+            "Layout: ${p.bytesPerSector} bytes/sector, ${p.bytesPerCluster} bytes/cluster, ${p.clusterCount} clusters, " +
+                "${p.fatCount} FATs of ${p.fatSizeBytes} bytes at offset ${p.fatOffsetBytes}",
+            "Size ${p.totalBytes} bytes, free ${freeBytes()} bytes",
+        )
+    }
+
+    /**
+     * Reads up to [bytes] from the start of the data area and returns the nanoseconds it
+     * took. Read only; used by "Inspect drive" to measure the drive's read speed.
+     */
+    fun readSpeedTest(bytes: Long): Pair<Long, Long> {
+        val p = fs.probe
+        val length = minOf(bytes, p.totalBytes - p.fatEndBytes).coerceAtLeast(0)
+        val buffer = ByteBuffer.allocate(1 shl 20)
+        var done = 0L
+        val start = System.nanoTime()
+        while (done < length) {
+            buffer.clear()
+            buffer.limit(minOf(buffer.capacity().toLong(), length - done).toInt())
+            fs.device.read(p.fatEndBytes + done, buffer)
+            done += buffer.limit()
+        }
+        return done to (System.nanoTime() - start)
+    }
+
     /** Nothing to do: the copy engine flushes after every file, and folder changes flush themselves. */
     override fun close() {}
 

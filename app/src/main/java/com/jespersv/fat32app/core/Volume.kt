@@ -49,6 +49,12 @@ interface Volume {
     fun flush()
 
     fun close()
+
+    /** Transfer counters since the last call, for the log. Null when the volume has none. */
+    fun takeStats(): String? = null
+
+    /** Facts about the volume for the log: layout, sizes, anything useful when debugging. */
+    fun describe(): List<String> = listOf("$title ($fsName)")
 }
 
 /** A file that is being written. Call order: write* -> finish -> (openRead) -> renameTo. */

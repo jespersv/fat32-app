@@ -10,6 +10,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import com.jespersv.fat32app.core.Copier
+import com.jespersv.fat32app.core.Diag
 
 /**
  * Runs the copy as a foreground service, so it keeps going when the screen
@@ -42,6 +43,7 @@ class CopyService : Service() {
 
     /** Android limits how long a data-sync service may run in one day. Stop cleanly if it is reached. */
     override fun onTimeout(startId: Int, fgsType: Int) {
+        Diag.w("Android's time limit for background copying was reached; cancelling")
         Session.copy?.cancelled?.set(true)
     }
 
@@ -50,8 +52,16 @@ class CopyService : Service() {
         val listener = object : Copier.Listener {
             private var lastUi = 0L
             private var lastNote = 0L
+            private var fileStart = 0L
+            private var verifyStart = 0L
+            private var written = 0L
 
             override fun onFileStart(index: Int, name: String, size: Long) {
+                fileStart = System.nanoTime()
+                verifyStart = 0L
+                written = 0L
+                job.volume.takeStats()
+                Diag.i("File ${index + 1}/${job.sources.size}: '$name', ${Session.formatSize(size)}")
                 job.index = index
                 job.name = name
                 job.fileSize = size
@@ -61,12 +71,24 @@ class CopyService : Service() {
             }
 
             override fun onProgress(index: Int, fileBytes: Long, totalBytes: Long, verifying: Boolean) {
+                if (verifying && verifyStart == 0L) verifyStart = System.nanoTime()
+                if (!verifying) written = fileBytes
                 job.fileBytes = fileBytes
                 job.verifying = verifying
                 publish(force = false)
             }
 
-            override fun onFileDone(index: Int, name: String, result: Copier.Result) {}
+            override fun onFileDone(index: Int, name: String, result: Copier.Result) {
+                val now = System.nanoTime()
+                val writeEnd = if (verifyStart != 0L) verifyStart else now
+                val timing = buildString {
+                    if (written > 0) append("write ${Diag.rate(written, writeEnd - fileStart)}")
+                    if (verifyStart != 0L) append("; verify ${Diag.rate(written, now - verifyStart)}")
+                }
+                val line = "  -> $result${if (timing.isEmpty()) "" else "; $timing"}"
+                if (result is Copier.Result.Failed) Diag.w(line) else Diag.i(line)
+                job.volume.takeStats()?.let { Diag.i("  $it") }
+            }
 
             private fun publish(force: Boolean) {
                 val now = SystemClock.uptimeMillis()
@@ -83,10 +105,11 @@ class CopyService : Service() {
         }
 
         val results: List<Copier.Result> = try {
-            Copier(job.volume, COPY_BUFFER).copyAll(
+            Copier(job.volume, COPY_BUFFER) { message, error -> Diag.e(message, error) }.copyAll(
                 job.sources, job.destDir, job.onCollision, job.verify, listener,
             ) { job.cancelled.get() }
         } catch (t: Throwable) {
+            Diag.e("Copy stopped by an internal error", t)
             // The copier reports ordinary failures per file. This catches the rest (out of
             // memory, a missing native library) so the screen never stays on "Copying".
             job.sources.map { Copier.Result.Failed("Stopped by an internal error: $t") }

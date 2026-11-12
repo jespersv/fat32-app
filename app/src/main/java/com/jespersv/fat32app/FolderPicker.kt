@@ -7,6 +7,7 @@ import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.ListView
 import android.widget.Toast
+import com.jespersv.fat32app.core.Diag
 import com.jespersv.fat32app.core.FatNames
 import com.jespersv.fat32app.core.Volume
 
@@ -57,7 +58,10 @@ class FolderPicker(
                 folders = result.getOrDefault(emptyList())
                 if (showing.isNotEmpty()) rows.add("↑  Up one level")
                 rows.addAll(folders.map { "📁  $it" })
-                result.exceptionOrNull()?.let { toast("Cannot read this folder: ${it.message}") }
+                result.exceptionOrNull()?.let {
+                    Diag.e("Listing /${showing.joinToString("/")} failed", it)
+                    toast("Cannot read this folder: ${it.message}")
+                }
             }
         }
     }
@@ -77,6 +81,7 @@ class FolderPicker(
                         if (result.isSuccess) {
                             if (path == parent) path = parent + name
                         } else {
+                            Diag.e("Creating folder '$name' failed", result.exceptionOrNull())
                             toast("Could not create the folder: ${result.exceptionOrNull()?.message}")
                         }
                         if (dialog.isShowing) load()

@@ -1,5 +1,6 @@
 package com.jespersv.fat32app.usb
 
+import com.jespersv.fat32app.core.Diag
 import com.jespersv.fat32app.core.FatKind
 import com.jespersv.fat32app.core.FatProbe
 import de.waldheinz.fs.fat.FatAccess
@@ -63,9 +64,25 @@ object FatCreator : FileSystemCreator {
     }
 
     override fun read(entry: PartitionTableEntry, blockDevice: BlockDeviceDriver): FileSystem? {
+        val where = if (entry.logicalBlockAddress == 0L && entry.totalNumberOfSectors == 0L) {
+            "whole device (no partition table)"
+        } else {
+            "partition type ${entry.partitionType}, start block ${entry.logicalBlockAddress}, " +
+                "${entry.totalNumberOfSectors} blocks"
+        }
+        Diag.i("Looking for FAT: $where; device block size ${blockDevice.blockSize}, ${blockDevice.blocks} blocks")
         val first = ByteBuffer.allocate(maxOf(512, blockDevice.blockSize))
         blockDevice.read(0, first)
-        val probe = FatProbe.parse(first.array()) ?: return null
+        val probe = FatProbe.parse(first.array())
+        if (probe == null) {
+            Diag.i("  Not a FAT boot sector: ${describeSector(first.array())}")
+            return null
+        }
+        Diag.i(
+            "  ${probe.kind}: ${probe.bytesPerSector} bytes/sector, ${probe.sectorsPerCluster} sectors/cluster, " +
+                "${probe.clusterCount} clusters, ${probe.fatCount} FATs of ${probe.fatSizeBytes} bytes, " +
+                "${probe.totalBytes} bytes total"
+        )
 
         // fat32-lib holds the allocation table in memory: 8 bytes per cluster, and
         // two copies plus the raw bytes while it compares them when opening.
@@ -77,6 +94,19 @@ object FatCreator : FileSystemCreator {
             )
         }
         val device = AumsBlockDevice(blockDevice, probe)
-        return FatLibFileSystem(FatFileSystem.read(device, false), probe, device)
+        val start = System.nanoTime()
+        val fat = FatFileSystem.read(device, false)
+        Diag.i("  Opened in ${(System.nanoTime() - start) / 1_000_000} ms. ${device.takeStats()}")
+        return FatLibFileSystem(fat, probe, device)
+    }
+
+    /** Enough of a non-FAT first sector to tell an MBR, exFAT or NTFS apart in the log. */
+    private fun describeSector(b: ByteArray): String {
+        fun ascii(from: Int, len: Int) =
+            String(b, from, len, Charsets.ISO_8859_1).map { if (it in ' '..'~') it else '.' }.joinToString("")
+        val signature = (b[510].toInt() and 0xFF == 0x55) && (b[511].toInt() and 0xFF == 0xAA)
+        val head = b.take(16).joinToString(" ") { String.format("%02X", it) }
+        return "first bytes $head, OEM '${ascii(3, 8)}', text at 54 '${ascii(54, 8)}', " +
+            "text at 82 '${ascii(82, 8)}', boot signature ${if (signature) "present" else "missing"}"
     }
 }

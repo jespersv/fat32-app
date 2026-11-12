@@ -45,6 +45,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Serves a diagnostics snapshot to the app the user shares it with. -->
+        <provider
+            android:name=".DiagProvider"
+            android:authorities="com.jespersv.fat32app.diag"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
         <service
             android:name=".CopyService"
             android:exported="false"

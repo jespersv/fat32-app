@@ -11,7 +11,12 @@ import java.util.zip.CRC32
  * and compared, and only then renamed to its real name. An interrupted copy
  * therefore never leaves something that looks like a finished file.
  */
-class Copier(private val volume: Volume, private val bufferSize: Int = 1 shl 20) {
+class Copier(
+    private val volume: Volume,
+    private val bufferSize: Int = 1 shl 20,
+    /** Receives problems with their full exception, for the diagnostics log. */
+    private val log: (String, Throwable?) -> Unit = { _, _ -> },
+) {
 
     interface Source {
         val name: String
@@ -59,6 +64,7 @@ class Copier(private val volume: Volume, private val bufferSize: Int = 1 shl 20)
             existing = volume.list(destDir).toMutableList()
         } catch (e: Exception) {
             fatal = "cannot read the destination folder (${describe(e)})"
+            log("Cannot list destination /${destDir.joinToString("/")}", e)
         }
 
         for ((i, src) in sources.withIndex()) {
@@ -71,11 +77,13 @@ class Copier(private val volume: Volume, private val bufferSize: Int = 1 shl 20)
                 } catch (e: Cancelled) {
                     Result.Skipped("Cancelled")
                 } catch (e: Exception) {
+                    log("Copying ${src.name} failed", e)
                     // Is the drive still there? If not, stop instead of failing every file slowly.
                     try {
                         existing = volume.list(destDir).toMutableList()
                     } catch (e2: Exception) {
                         fatal = "the drive stopped responding"
+                        log("Drive no longer responds; the remaining files are not attempted", e2)
                     }
                     Result.Failed(describe(e))
                 }
@@ -89,6 +97,7 @@ class Copier(private val volume: Volume, private val bufferSize: Int = 1 shl 20)
             volume.flush()
         } catch (e: Exception) {
             // Nothing more can be done here; per-file flushes already ran.
+            log("Final flush failed", e)
         }
         return results
     }
@@ -186,6 +195,7 @@ class Copier(private val volume: Volume, private val bufferSize: Int = 1 shl 20)
                     volume.flush()
                 } catch (e: Exception) {
                     // The drive is probably gone; the leftover is a .part file at worst.
+                    log("Could not remove the unfinished $tempName", e)
                 }
             }
         }

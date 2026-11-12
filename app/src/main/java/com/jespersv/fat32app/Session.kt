@@ -14,9 +14,11 @@ import android.os.Looper
 import android.os.SystemClock
 import android.os.storage.StorageManager
 import com.jespersv.fat32app.core.Copier
+import com.jespersv.fat32app.core.Diag
 import com.jespersv.fat32app.core.Volume
 import com.jespersv.fat32app.saf.SafVolume
 import com.jespersv.fat32app.saf.UriSource
+import com.jespersv.fat32app.usb.FatVolume
 import com.jespersv.fat32app.usb.UsbDrives
 import me.jahnen.libaums.core.UsbMassStorageDevice
 import java.util.concurrent.ExecutorService
@@ -92,6 +94,9 @@ object Session {
         private set
     val log = ArrayList<String>()
 
+    /** Whether the Diagnostics section on the screen is expanded. */
+    var diagOpen = false
+
     private lateinit var app: Context
     private lateinit var usbManager: UsbManager
     private var device: UsbMassStorageDevice? = null
@@ -112,14 +117,20 @@ object Session {
         }
         app.registerReceiver(object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
+                val device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java)
                 when (intent.action) {
-                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> onAttached()
-                    UsbManager.ACTION_USB_DEVICE_DETACHED ->
-                        onDetached(intent.getParcelableExtra(UsbManager.EXTRA_DEVICE, UsbDevice::class.java))
+                    UsbManager.ACTION_USB_DEVICE_ATTACHED -> {
+                        Diag.i("USB attached: ${device?.let { UsbDrives.describe(it, withNames = false) }}")
+                        onAttached()
+                    }
+                    UsbManager.ACTION_USB_DEVICE_DETACHED -> {
+                        Diag.i("USB detached: ${device?.deviceName}")
+                        onDetached(device)
+                    }
                     ACTION_USB_PERMISSION -> {
-                        if (!intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
-                            driveMessage = "USB access was not allowed."
-                        }
+                        val granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)
+                        Diag.i("USB permission for ${device?.deviceName}: ${if (granted) "granted" else "denied"}")
+                        if (!granted) driveMessage = "USB access was not allowed."
                         scan()
                     }
                 }
@@ -136,7 +147,10 @@ object Session {
             addDataScheme("file")
         }
         app.registerReceiver(object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) = scan()
+            override fun onReceive(context: Context, intent: Intent) {
+                Diag.i("Android storage event: ${intent.action?.substringAfterLast('.')} ${intent.data}")
+                scan()
+            }
         }, media, Context.RECEIVER_NOT_EXPORTED)
 
         // A drive that is already plugged in gets the same short wait as a new one.
@@ -223,6 +237,7 @@ object Session {
 
     /** The user chose to use the drive directly although Android has it mounted. */
     fun takeOverDirectly() {
+        Diag.i("User chose to take the drive over from Android")
         forceDirect = true
         scan()
     }
@@ -230,6 +245,7 @@ object Session {
     /** The user picked a folder with Android's own picker. */
     fun useFolder(tree: Uri) {
         if (copy != null) return
+        Diag.i("Folder picked with Android: $tree")
         io.execute {
             val picked = SafVolume(app, tree)
             main.post {
@@ -248,6 +264,11 @@ object Session {
         val target = volume ?: return null
         if (copy != null || sources.isEmpty() || drive != Drive.READY) return null
         val job = CopyJob(target, direct, ArrayList(sources), destDir, onCollision, verify)
+        Diag.i(
+            "Copy started: ${job.sources.size} files, ${formatSize(job.sources.sumOf { it.size.coerceAtLeast(0) })}, " +
+                "to ${if (direct) "/" + destDir.joinToString("/") else target.title} on ${target.fsName}, " +
+                "on name clash $onCollision, verify $verify"
+        )
         copy = job
         outcome = null
         changed()
@@ -271,6 +292,11 @@ object Session {
             if (result is Copier.Result.Copied) sources.remove(job.sources[i])
             if (result is Copier.Result.Skipped && result.reason == "Cancelled") problems = true
         }
+        Diag.i(
+            "Copy finished: ${results.count { it is Copier.Result.Copied }} copied, " +
+                "${results.count { it is Copier.Result.Skipped }} skipped, " +
+                "${results.count { it is Copier.Result.Failed }} failed"
+        )
         while (log.size > 300) log.removeAt(0)
         copy = null
         val lost = volume !== job.volume
@@ -334,6 +360,7 @@ object Session {
     /** Forgets the directly opened drive. Closing waits its turn behind any running work. */
     private fun releaseDirect() {
         val gone = device ?: return
+        Diag.i("Releasing the USB drive")
         val old = volume
         device = null
         if (direct) {
@@ -347,6 +374,7 @@ object Session {
     }
 
     private fun requestPermission(usbDevice: UsbDevice) {
+        Diag.i("Asking for USB permission: ${UsbDrives.describe(usbDevice, withNames = false)}")
         val intent = Intent(ACTION_USB_PERMISSION).setPackage(app.packageName)
         // Mutable because the system adds the device and the answer to the intent.
         val pending = PendingIntent.getBroadcast(app, 0, intent, PendingIntent.FLAG_MUTABLE)
@@ -361,7 +389,13 @@ object Session {
      */
     private fun androidUse(): AndroidUse {
         val storage = app.getSystemService(Context.STORAGE_SERVICE) as StorageManager
-        val states = storage.storageVolumes.filter { it.isRemovable }.map { it.state }
+        val removable = storage.storageVolumes.filter { it.isRemovable }
+        val summary = removable.joinToString("; ") { "'${it.getDescription(app)}' ${it.state} uuid=${it.uuid}" }
+        if (summary != lastVolumes) {
+            lastVolumes = summary
+            Diag.i("Android removable storage: ${summary.ifEmpty { "none" }}")
+        }
+        val states = removable.map { it.state }
         return when {
             states.any { it == Environment.MEDIA_MOUNTED || it == Environment.MEDIA_MOUNTED_READ_ONLY } ->
                 AndroidUse.MOUNTED
@@ -371,10 +405,63 @@ object Session {
         }
     }
 
+    private var lastVolumes: String? = null
+
     private fun setDrive(state: Drive, message: String) {
+        if (state != drive || message != driveMessage) {
+            Diag.i("Drive state: $state${if (message.isEmpty()) "" else " ($message)"}")
+        }
         drive = state
         driveMessage = message
         changed()
+    }
+
+    /**
+     * "Inspect drive": logs everything the app can learn about connected drives
+     * without writing to them. Runs behind any other drive work.
+     */
+    fun inspect(done: () -> Unit) {
+        Diag.i("===== Inspect drive =====")
+        DiagShare.deviceInfo(app).forEach { Diag.i(it) }
+        Diag.i("App state: drive $drive, route ${if (direct) "direct" else "Android"}, volume ${volume?.title}")
+        val devices = usbManager.deviceList.values
+        Diag.i("USB devices: ${devices.size}")
+        for (d in devices) {
+            val allowed = usbManager.hasPermission(d)
+            Diag.i("  ${UsbDrives.describe(d, withNames = allowed)}, permission ${if (allowed) "yes" else "no"}")
+        }
+        val storage = app.getSystemService(Context.STORAGE_SERVICE) as StorageManager
+        for (v in storage.storageVolumes) {
+            val dir = v.directory
+            val space = dir?.let { runCatching { " free ${formatSize(it.usableSpace)} of ${formatSize(it.totalSpace)}" }.getOrNull() }
+            Diag.i(
+                "  Storage '${v.getDescription(app)}': ${v.state}, removable ${v.isRemovable}, primary ${v.isPrimary}, " +
+                    "uuid ${v.uuid}, path $dir${space.orEmpty()}"
+            )
+        }
+        val target = volume
+        io.execute {
+            if (target != null) {
+                runCatching {
+                    target.describe().forEach { Diag.i("  $it") }
+                    val entries = target.list(emptyList())
+                    Diag.i("  Root folder: ${entries.size} entries")
+                    for (e in entries.take(40)) {
+                        Diag.i("    ${if (e.isDir) "[dir] " else ""}${e.name}${if (e.isDir) "" else " (${e.size} bytes)"}")
+                    }
+                    if (target is FatVolume) {
+                        target.takeStats()
+                        val (bytes, nanos) = target.readSpeedTest(16L * 1024 * 1024)
+                        Diag.i("  Read speed: ${Diag.rate(bytes, nanos)}")
+                        Diag.i("  ${target.takeStats()}")
+                    }
+                }.onFailure { Diag.e("Inspecting the volume failed", it) }
+            } else {
+                Diag.i("  No volume is open, so there is no file system to inspect.")
+            }
+            Diag.i("===== Inspect done =====")
+            main.post(done)
+        }
     }
 
     fun formatSize(bytes: Long): String = when {

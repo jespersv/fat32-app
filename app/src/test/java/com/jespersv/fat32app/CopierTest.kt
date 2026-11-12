@@ -167,6 +167,19 @@ class CopierTest {
     }
 
     @Test
+    fun problemsReachTheLogWithTheirException() {
+        val v = FakeVolume()
+        v.failAfterBytes = 8192
+        val logged = ArrayList<Pair<String, Throwable?>>()
+        Copier(v, 4096) { m, e -> logged += m to e }.copyAll(
+            listOf(Bytes("a.bin", data(50_000)), Bytes("b.bin", data(10))), emptyList(),
+            OnCollision.SKIP, true, Quiet,
+        ) { false }
+        assertTrue(logged.any { it.first.contains("a.bin") && it.second?.message == "write failed" })
+        assertTrue(logged.any { it.first.contains("no longer responds") })
+    }
+
+    @Test
     fun removesStaleTempFileFromEarlierRun() {
         val v = FakeVolume()
         v.files["a.bin.part"] = data(3)
