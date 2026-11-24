@@ -26,7 +26,7 @@ object DiagShare {
         val am = context.getSystemService(ActivityManager::class.java)
         val pageSize = runCatching { Os.sysconf(OsConstants._SC_PAGESIZE) }.getOrDefault(-1L)
         return listOf(
-            "App ${pkg?.versionName} (${pkg?.longVersionCode})",
+            "App ${pkg?.versionName} (${pkg?.longVersionCode}), build ${BuildConfig.BUILD_ID}",
             "Phone ${Build.MANUFACTURER} ${Build.MODEL} (${Build.DEVICE})",
             "Android ${Build.VERSION.RELEASE}, API ${Build.VERSION.SDK_INT}, build ${Build.DISPLAY}",
             "ABIs ${Build.SUPPORTED_ABIS.joinToString()}, page size $pageSize bytes",

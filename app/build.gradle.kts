@@ -13,6 +13,16 @@ android {
         targetSdk = 35
         versionCode = 5
         versionName = "0.4.1"
+
+        // Shown at the bottom of the app: build date and the GitHub Actions run number
+        // ("local" when built elsewhere), e.g. 2026-11-24.42.
+        val buildDate = java.time.LocalDate.now(java.time.ZoneId.of("Europe/Stockholm"))
+        val buildRun = System.getenv("GITHUB_RUN_NUMBER") ?: "local"
+        buildConfigField("String", "BUILD_ID", "\"$buildDate.$buildRun\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     signingConfigs {
