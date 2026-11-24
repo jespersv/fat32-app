@@ -616,6 +616,16 @@ class MainActivity : Activity() {
         diagBox.addView(diagText, rowParams(top = 8))
         column.addView(diagBox, rowParams())
 
+        // Pushes the build line to the bottom of the screen when the content is short.
+        column.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        column.addView(TextView(this).apply {
+            text = "Version ${BuildConfig.VERSION_NAME} · build ${BuildConfig.BUILD_ID}"
+            textSize = 11f
+            setTextColor(Color.GRAY)
+            gravity = Gravity.CENTER
+            setTextIsSelectable(true)
+        }, rowParams(top = 16))
+
         return ScrollView(this).apply {
             isFillViewport = true
             addView(column, MATCH_PARENT, WRAP_CONTENT)
