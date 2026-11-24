@@ -308,6 +308,57 @@ class DiskImageTest {
         assertNull(FatProbe.parse(ByteArray(512)))
     }
 
+    @Test
+    fun fat16With64KiBClustersOpens() {
+        // FAT16 drives of 2-4 GB (and some FAT32 ones) use 128 sectors per cluster.
+        // fat32-lib 0.6.5 read that byte as -128 and refused the drive.
+        val disk = formatBigClusters(clusters = 4200, fat16 = true)
+        val probe = FatProbe.parse(disk.bytes.copyOf(512))!!
+        assertEquals(FatKind.FAT16, probe.kind)
+        assertEquals(65536L, probe.bytesPerCluster)
+        roundTrip(disk, 0, "FAT16")
+    }
+
+    @Test
+    fun fat12With64KiBClustersOpens() {
+        val disk = formatBigClusters(clusters = 250, fat16 = false)
+        assertEquals(FatKind.FAT12, FatProbe.parse(disk.bytes.copyOf(512))!!.kind)
+        roundTrip(disk, 0, "FAT12")
+    }
+
+    /** Lays out an empty FAT12/FAT16 volume with 64 KiB clusters, as Windows does for large FAT16 drives. */
+    private fun formatBigClusters(clusters: Int, fat16: Boolean): MemDisk {
+        val spc = 128
+        val rootEntries = 512
+        val fatBytes = if (fat16) (clusters + 2) * 2 else ((clusters + 2) * 3 + 1) / 2
+        val fatSectors = (fatBytes + 511) / 512
+        val rootSectors = rootEntries * 32 / 512
+        val dataStart = 1 + 2 * fatSectors + rootSectors
+        val total = dataStart + clusters * spc
+        val disk = MemDisk(total * 512)
+        val b = ByteBuffer.wrap(disk.bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        b.put(0, 0xEB.toByte()).put(1, 0x3C).put(2, 0x90.toByte())
+        "MSDOS5.0".toByteArray().copyInto(disk.bytes, 3)
+        b.putShort(11, 512).put(13, spc.toByte()).putShort(14, 1).put(16, 2)
+        b.putShort(17, rootEntries.toShort()).put(21, 0xF8.toByte()).putShort(22, fatSectors.toShort())
+        b.putShort(24, 63).putShort(26, 255)
+        if (total < 65536) b.putShort(19, total.toShort()) else b.putInt(32, total)
+        b.put(36, 0x80.toByte()).put(38, 0x29).putInt(39, 0x1234ABCD)
+        "TESTDISK   ".toByteArray().copyInto(disk.bytes, 43)
+        (if (fat16) "FAT16   " else "FAT12   ").toByteArray().copyInto(disk.bytes, 54)
+        b.put(510, 0x55).put(511, 0xAA.toByte())
+        for (copy in 0 until 2) {
+            val at = (1 + copy * fatSectors) * 512
+            val head = if (fat16) byteArrayOf(0xF8.toByte(), 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte())
+            else byteArrayOf(0xF8.toByte(), 0xFF.toByte(), 0xFF.toByte())
+            head.copyInto(disk.bytes, at)
+        }
+        val root = (1 + 2 * fatSectors) * 512
+        "TESTDISK   ".toByteArray().copyInto(disk.bytes, root)
+        disk.bytes[root + 11] = 0x08
+        return disk
+    }
+
     private fun writeMbr(disk: MemDisk, type: Int, start: Int, sectors: Int) {
         val b = ByteBuffer.wrap(disk.bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
         b.put(0, 0x33.toByte()).put(1, 0xC0.toByte())
