@@ -115,3 +115,8 @@ app/src/test/      Unit tests, including end-to-end tests on in-memory FAT image
 
 - [libaums](https://github.com/magnusja/libaums) 0.10.0, Apache 2.0: USB mass storage access.
 - [fat32-lib](https://github.com/waldheinz/fat32-lib) 0.6.5, LGPL 2.1: FAT file system. Kept as source in `fat32-lib/` with one fix for drives with 64 KiB clusters (see `fat32-lib/README.md`).
+
+## License
+
+MIT, see [LICENSE](LICENSE). The patched copy of fat32-lib in `fat32-lib/` keeps its own
+license, the GNU LGPL 2.1 or later.
