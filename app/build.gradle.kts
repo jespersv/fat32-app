@@ -11,8 +11,8 @@ android {
         applicationId = "com.jespersv.fat32app"
         minSdk = 33
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 5
+        versionName = "0.4.1"
     }
 
     signingConfigs {
@@ -55,7 +55,7 @@ dependencies {
     // USB mass storage access (SCSI over USB, partition tables).
     implementation("me.jahnen.libaums:core:0.10.0")
     // FAT12/FAT16/FAT32 file system.
-    implementation("de.waldheinz:fat32-lib:0.6.5")
+    implementation(project(":fat32-lib"))
 
     testImplementation("junit:junit:4.13.2")
 }

@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "fat32-app"
-include(":app")
+include(":app", ":fat32-lib")
